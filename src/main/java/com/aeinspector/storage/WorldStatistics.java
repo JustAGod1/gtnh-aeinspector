@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import net.minecraft.nbt.NBTTagCompound;
 
 import com.aeinspector.core.DeviceDictionary;
 import com.aeinspector.core.NetworkRecord;
@@ -23,6 +24,38 @@ public final class WorldStatistics implements AutoCloseable {
     private long tick;
     private long reservedUntil;
     private int savedResources, savedDevices, savedNetworks, savedPairs;
+
+    public WorldStatistics() {
+        metadata = null; database = new SeriesDatabase();
+        resources = new ResourceDictionary(); devices = new DeviceDictionary();
+    }
+
+    public WorldStatistics(NBTTagCompound tag) throws IOException {
+        if (tag.getInteger("version") != 1) throw new IOException("Unsupported Inspector NBT version");
+        metadata = null;
+        try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(tag.getByteArray("dictionary")))) {
+            if (in.readInt() != 1) throw new IOException("Unsupported Inspector dictionary version");
+            tick = in.readLong();
+            if (tick < 0) throw new IOException("Invalid saved tick");
+            resources = ResourceDictionary.read(in); devices = DeviceDictionary.read(in);
+            int count = in.readInt();
+            if (count < 0 || count > 1_000_000) throw new IOException("Invalid network count");
+            for (int i = 0; i < count; i++) {
+                NetworkRecord record = NetworkRecord.read(in);
+                if (record.id != i) throw new IOException("Invalid network ID");
+                networks.add(record);
+            }
+            if (in.read() != -1) throw new IOException("Trailing dictionary data");
+        }
+        database = SeriesDatabase.readNBT(tag.getTagList("series", 10));
+    }
+
+    public void writeNBT(NBTTagCompound tag) throws IOException {
+        if (metadata == null) drain(); // Legacy mode is used only for importing already saved files.
+        tag.setInteger("version", 1);
+        tag.setByteArray("dictionary", encodeMetadata(tick));
+        tag.setTag("series", database.writeNBT());
+    }
 
     public WorldStatistics(Path directory) throws IOException {
         Files.createDirectories(directory);
@@ -76,8 +109,8 @@ public final class WorldStatistics implements AutoCloseable {
     public void drain() throws IOException {
         int pairCount = 0;
         for (NetworkRecord network : networks) pairCount += network.pairCount();
-        if (tick >= reservedUntil || savedResources != resources.size() || savedDevices != devices.size()
-                || savedNetworks != networks.size() || savedPairs != pairCount) persistMetadata(tick + 100);
+        if (metadata != null && (tick >= reservedUntil || savedResources != resources.size() || savedDevices != devices.size()
+                || savedNetworks != networks.size() || savedPairs != pairCount)) persistMetadata(tick + 100);
         for (NetworkRecord network : networks) {
             if (network.pending.size() == 0) continue;
             database.append(network.id, tick, network.pending);
@@ -89,10 +122,10 @@ public final class WorldStatistics implements AutoCloseable {
         drain();
         database.flush();
         // Clean checkpoints recover the exact clock; crash checkpoints use the reserved upper bound.
-        persistMetadata(tick);
+        if (metadata != null) persistMetadata(tick);
     }
 
-    private void persistMetadata(long recoveryTick) throws IOException {
+    private byte[] encodeMetadata(long recoveryTick) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         try (DataOutputStream out = new DataOutputStream(bytes)) {
             out.writeInt(1);
@@ -102,7 +135,11 @@ public final class WorldStatistics implements AutoCloseable {
             out.writeInt(networks.size());
             for (NetworkRecord network : networks) network.write(out);
         }
-        metadata.write("world", bytes.toByteArray());
+        return bytes.toByteArray();
+    }
+
+    private void persistMetadata(long recoveryTick) throws IOException {
+        metadata.write("world", encodeMetadata(recoveryTick));
         reservedUntil = recoveryTick;
         savedResources = resources.size();
         savedDevices = devices.size();
@@ -115,6 +152,6 @@ public final class WorldStatistics implements AutoCloseable {
     public void close() throws IOException {
         checkpoint();
         database.close();
-        metadata.close();
+        if (metadata != null) metadata.close();
     }
 }

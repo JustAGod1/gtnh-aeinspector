@@ -3,7 +3,7 @@ plugins {
     id("com.gtnewhorizons.gtnhconvention")
 }
 
-version = "0.1.0"
+version = "0.1.6"
 base { archivesName.set("AE-Inspector") }
 
 // Opt-in development harness; never included in the shipped mod JAR.
@@ -31,4 +31,14 @@ tasks.register<JavaExec>("benchmarkCore") {
         jvmArgs("-XX:StartFlightRecording=settings=profile,filename=" + layout.buildDirectory.file("core-profile.jfr").get().asFile.absolutePath)
     }
     args(layout.buildDirectory.dir("core-benchmark").get().asFile.absolutePath)
+}
+
+// Read-only regression on a COPY of data/aeinspector.dat; independent from the game process.
+tasks.register<JavaExec>("verifySavedHistory") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.aeinspector.storage.VerifySavedHistory")
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(21)) })
+    maxHeapSize = "1G"
+    args(providers.gradleProperty("historyFile").getOrElse("build/inspector-history-copy.dat"))
 }

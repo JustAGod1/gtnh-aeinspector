@@ -86,6 +86,28 @@ public final class TimeSeries {
     }
 
     public long total() { return total; }
+    /** Read counts directly, without copying a ring or allocating a graph for a list row. */
+    public long collect(int level, long from, long to, long width, long[] graph) {
+        SparseSeries stored = level == WIDTHS.length ? allTime : levels[level];
+        long sum = 0;
+        for (int i = 0; i < stored.size(); i++) {
+            long time = stored.time(i), value = stored.value(i);
+            if (time < from || time >= to) continue;
+            sum = Math.addExact(sum, value);
+            if (graph != null) addPoint(graph, from, width, time, value);
+        }
+        if (level < WIDTHS.length) for (int i = level; i >= 1; i--) {
+            long time = pendingTime[i] / WIDTHS[level] * WIDTHS[level];
+            if (pendingValue[i] == 0 || time < from || time >= to) continue;
+            sum = Math.addExact(sum, pendingValue[i]);
+            if (graph != null) addPoint(graph, from, width, time, pendingValue[i]);
+        }
+        return sum;
+    }
+    private static void addPoint(long[] graph, long start, long width, long time, long value) {
+        int bucket = (int) ((time - start) / width);
+        graph[bucket] = Math.addExact(graph[bucket], value);
+    }
     public long allTimeWidth() { return allWidth; }
 
     public long allocatedBytes() { return allocatedBytes; }

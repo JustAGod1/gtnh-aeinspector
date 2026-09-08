@@ -10,6 +10,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.nbt.NBTTagList;
 
 import com.aeinspector.core.LongCounters;
 import com.aeinspector.core.SparseSeries;
@@ -26,6 +28,9 @@ public final class SeriesDatabase implements AutoCloseable {
     private long residentBytes;
     private int dirtyCount;
     private boolean closed;
+
+    /** In-game mode: Minecraft WorldSavedData owns persistence, all series stay in memory. */
+    public SeriesDatabase() { root = null; disk = null; memoryLimit = Long.MAX_VALUE; }
 
     public SeriesDatabase(Path root, int maxSegmentBytes, long cacheBytes) throws IOException {
         if (maxSegmentBytes < 16 || cacheBytes < 0) throw new IllegalArgumentException("Storage budgets");
@@ -82,6 +87,19 @@ public final class SeriesDatabase implements AutoCloseable {
         return result;
     }
 
+    /** One bounded row read; graph == null is a summary-only query. Never creates a TimeSeries. */
+    public void collect(long network, long row, int level, long from, long to, long width,
+            long[] counts, long[] totals, int channel, long[] graph) throws IOException {
+        check();
+        lookup.network = network; lookup.index = row >>> 8;
+        Shard shard = shards.get(lookup);
+        if (shard == null && disk != null) shard = shard(network, row);
+        TimeSeries series = shard == null ? null : shard.rows[(int) (row & 255)];
+        if (series == null) return;
+        counts[channel] = Math.addExact(counts[channel], series.collect(level, from, to, width, graph));
+        totals[channel] = Math.addExact(totals[channel], series.total());
+    }
+
     private Shard shard(long network, long row) throws IOException {
         lookup.network = network;
         lookup.index = row >>> 8;
@@ -89,7 +107,7 @@ public final class SeriesDatabase implements AutoCloseable {
         if (result != null) return result;
         ShardKey key = new ShardKey(network, row >>> 8);
         result = new Shard(key);
-        if (Files.exists(root.resolve(result.filename + ".aeis"))) {
+        if (disk != null && Files.exists(root.resolve(result.filename + ".aeis"))) {
             try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(disk.read(result.filename)))) {
                 if (in.readInt() != 1) throw new IOException("Unsupported series shard");
                 int count = in.readInt();
@@ -115,6 +133,7 @@ public final class SeriesDatabase implements AutoCloseable {
 
     private void save(Shard shard) throws IOException {
         if (!shard.dirty) return;
+        if (disk == null) { unmarkDirty(shard); return; }
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         try (DataOutputStream out = new DataOutputStream(bytes)) {
             out.writeInt(1);
@@ -178,7 +197,7 @@ public final class SeriesDatabase implements AutoCloseable {
     }
 
     public long residentBytes() { return residentBytes; }
-    public long cachedSegmentBytes() { return disk.cachedBytes(); }
+    public long cachedSegmentBytes() { return disk == null ? 0 : disk.cachedBytes(); }
     public int dirtyShards() { return dirtyCount; }
 
     private void check() throws IOException {
@@ -190,9 +209,67 @@ public final class SeriesDatabase implements AutoCloseable {
         if (closed) return;
         flush();
         closed = true;
-        disk.close();
+        if (disk != null) disk.close();
         shards.clear();
         residentBytes = 0;
+    }
+
+    public NBTTagList writeNBT() throws IOException {
+        check();
+        if (disk != null) {
+            // Read-only one-time import of old releases; never rewrite legacy files.
+            try (java.util.stream.Stream<Path> files = Files.list(root)) {
+                for (Path file : (Iterable<Path>) files::iterator) {
+                    java.util.regex.Matcher match = java.util.regex.Pattern.compile("n([0-9]+)-s([0-9]+)\\.aeis").matcher(file.getFileName().toString());
+                    if (match.matches()) {
+                        long network = Long.parseLong(match.group(1)), index = Long.parseLong(match.group(2));
+                        if (index > (Long.MAX_VALUE >>> 8)) throw new IOException("Invalid legacy shard index");
+                        shard(network, index << 8);
+                    }
+                }
+            }
+        }
+        NBTTagList list = new NBTTagList();
+        for (Shard shard : shards.values()) {
+            if (shard.count == 0) continue;
+            NBTTagCompound tag = new NBTTagCompound();
+            tag.setLong("network", shard.key.network); tag.setLong("index", shard.key.index);
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            try (DataOutputStream out = new DataOutputStream(bytes)) {
+                out.writeInt(shard.count);
+                for (int i = 0; i < 256; i++) if (shard.rows[i] != null) {
+                    out.writeInt(i); shard.rows[i].write(out);
+                }
+            }
+            // Compact lossless numeric arrays inside standard NBT, without external segment files.
+            tag.setByteArray("rows", bytes.toByteArray()); list.appendTag(tag);
+        }
+        return list;
+    }
+
+    public static SeriesDatabase readNBT(NBTTagList list) throws IOException {
+        SeriesDatabase database = new SeriesDatabase();
+        for (int n = 0; n < list.tagCount(); n++) {
+            NBTTagCompound tag = list.getCompoundTagAt(n);
+            long network = tag.getLong("network"), index = tag.getLong("index");
+            if (network < 0 || index < 0 || index > (Long.MAX_VALUE >>> 8)) throw new IOException("Invalid NBT shard identity");
+            ShardKey key = new ShardKey(network, index);
+            if (database.shards.containsKey(key)) throw new IOException("Duplicate NBT shard");
+            Shard shard = new Shard(key);
+            try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(tag.getByteArray("rows")))) {
+                int count = in.readInt();
+                if (count < 1 || count > 256) throw new IOException("Invalid NBT shard size");
+                for (int i = 0; i < count; i++) {
+                    int slot = in.readInt();
+                    if (slot < 0 || slot >= 256 || shard.rows[slot] != null) throw new IOException("Invalid NBT row");
+                    TimeSeries series = TimeSeries.read(in); shard.rows[slot] = series; shard.count++;
+                    shard.bytes += series.allocatedBytes() + 512;
+                }
+                if (in.read() != -1) throw new IOException("Trailing NBT series data");
+            }
+            database.shards.put(key, shard); database.residentBytes += shard.bytes;
+        }
+        return database;
     }
 
     private static final class Shard {

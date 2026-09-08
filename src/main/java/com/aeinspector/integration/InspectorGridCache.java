@@ -21,6 +21,7 @@ public final class InspectorGridCache implements IGridCache {
     private static final String SPLIT = "aeinspector.splitParent";
     public final IGrid grid;
     private NetworkRecord record;
+    private long nodeVersion;
     private final Set<IGridNode> nodes = Collections.newSetFromMap(new IdentityHashMap<IGridNode, Boolean>());
 
     public InspectorGridCache(IGrid grid) { this.grid = grid; }
@@ -37,13 +38,14 @@ public final class InspectorGridCache implements IGridCache {
     }
 
     @Override
-    public void addNode(IGridNode node, IGridHost machine) { nodes.add(node); }
+    public void addNode(IGridNode node, IGridHost machine) { if (nodes.add(node)) nodeVersion++; }
+    public long nodeVersion() { return nodeVersion; }
 
     public Set<IGridNode> nodes() { return Collections.unmodifiableSet(nodes); }
 
     @Override
     public void removeNode(IGridNode node, IGridHost machine) {
-        nodes.remove(node);
+        if (nodes.remove(node)) nodeVersion++;
         FlowRuntime runtime = FlowRuntime.get();
         if (runtime != null && machine instanceof IActionHost) runtime.forget((IActionHost) machine);
     }

@@ -1,6 +1,5 @@
 package com.aeinspector.integration;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.IdentityHashMap;
@@ -12,6 +11,8 @@ import com.aeinspector.core.NetworkRecord;
 import com.aeinspector.core.TransferTracker;
 import com.aeinspector.core.BusTransferScope;
 import com.aeinspector.storage.WorldStatistics;
+import com.aeinspector.storage.InspectorSavedData;
+import net.minecraft.world.WorldServer;
 
 import appeng.api.networking.IGrid;
 import appeng.api.networking.IGridNode;
@@ -27,26 +28,35 @@ import cpw.mods.fml.common.FMLCommonHandler;
 public final class FlowRuntime {
     private static FlowRuntime active;
     public final WorldStatistics world;
+    private final InspectorSavedData savedData;
     public final ResourceResolver resources;
     public final TransferTracker transfers;
     public final BusTransferScope busTransfers;
+    public final com.aeinspector.gui.InspectorQueries queries;
     private final IdentityHashMap<IActionHost, Integer> endpoints = new IdentityHashMap<>();
 
-    private FlowRuntime(File root) throws IOException {
-        world = new WorldStatistics(root.toPath().resolve("aeinspector"));
+    private FlowRuntime(WorldServer overworld) {
+        InspectorSavedData saved = (InspectorSavedData) overworld.mapStorage.loadData(InspectorSavedData.class, InspectorSavedData.NAME);
+        if (saved == null) {
+            saved = new InspectorSavedData(InspectorSavedData.NAME);
+            try { saved.importLegacy(overworld.getSaveHandler().getWorldDirectory().toPath().resolve("aeinspector")); }
+            catch (IOException e) { throw new UncheckedIOException("Cannot import existing Inspector history into NBT", e); }
+            overworld.mapStorage.setData(InspectorSavedData.NAME, saved);
+        }
+        savedData = saved; world = saved.statistics(); saved.markDirty();
         resources = new ResourceResolver(world.resources);
         busTransfers = new BusTransferScope((network, resource, device, incoming, amount) ->
                 world.network((int) network).add(resource, device, incoming, false, amount));
         transfers = new TransferTracker(busTransfers);
+        queries = new com.aeinspector.gui.InspectorQueries(this);
     }
 
     public static FlowRuntime get() {
         if (!FMLCommonHandler.instance().getEffectiveSide().isServer()) return null;
         if (active == null) {
-            File root = DimensionManager.getCurrentSaveRootDirectory();
-            if (root == null) return null;
-            try { active = new FlowRuntime(root); }
-            catch (IOException e) { throw new UncheckedIOException("Cannot open AE Inspector history", e); }
+            WorldServer overworld = DimensionManager.getWorld(0);
+            if (overworld == null) return null;
+            active = new FlowRuntime(overworld);
         }
         return active;
     }
@@ -57,19 +67,17 @@ public final class FlowRuntime {
 
     public static void checkpoint() {
         if (active == null) return;
-        try { active.world.checkpoint(); }
-        catch (IOException e) { throw new UncheckedIOException("Cannot save AE Inspector history", e); }
+        active.savedData.markDirty();
     }
 
     public static void close() {
         if (active == null) return;
-        try { active.world.close(); }
-        catch (IOException e) { throw new UncheckedIOException("Cannot close AE Inspector history", e); }
-        finally { active = null; }
+        // The world's MapStorage owns saving and lifetime; don't write after its save handler has closed.
+        active.savedData.markDirty(); active.queries.close(); active = null;
     }
 
     public void endTick() {
-        try { world.endTick(); }
+        try { world.endTick(); savedData.markDirty(); queries.tick(); }
         catch (IOException e) { throw new UncheckedIOException("Cannot record AE Inspector tick", e); }
     }
 

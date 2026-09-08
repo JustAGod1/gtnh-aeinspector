@@ -16,14 +16,27 @@ import appeng.core.AEConfig;
 import appeng.items.tools.powered.powersink.AEBasePoweredItem;
 import appeng.util.ConfigManager;
 import appeng.util.Platform;
+import cofh.api.energy.IEnergyContainerItem;
 
 /** Uses AE2's battery integrations and security-station encoding protocol. */
-public final class ItemInspector extends AEBasePoweredItem implements IWirelessTermHandler {
+public final class ItemInspector extends AEBasePoweredItem implements IWirelessTermHandler, IEnergyContainerItem {
     public ItemInspector() {
         super(AEConfig.instance.wirelessTerminalBattery, Optional.absent());
         setUnlocalizedName("aeinspector.inspector");
         setTextureName("aeinspector:inspector");
         setCreativeTab(CreativeTabs.tabTools);
+    }
+
+    // Explicitly expose the RF API even when AE2 strips its optional RFItem interface from RedstoneFlux.
+    @Override public int receiveEnergy(ItemStack stack, int amount, boolean simulate) {
+        return InspectorRfCharging.receive(this, stack, amount, simulate);
+    }
+    @Override public int extractEnergy(ItemStack stack, int amount, boolean simulate) { return 0; }
+    @Override public int getEnergyStored(ItemStack stack) {
+        return InspectorRfCharging.toRf(getAECurrentPower(stack));
+    }
+    @Override public int getMaxEnergyStored(ItemStack stack) {
+        return InspectorRfCharging.toRf(getAEMaxPower(stack));
     }
 
     @Override public ItemStack onItemRightClick(ItemStack stack, World world, EntityPlayer player) {

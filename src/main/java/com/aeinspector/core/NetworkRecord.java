@@ -40,6 +40,9 @@ public final class NetworkRecord {
 
     public int pairCount() { return pairKeys.size(); }
     public long pairKey(int id) { return pairKeys.get(id); }
+    public int coverageCount() { return coverage.size(); }
+    public long coverageStart(int index) { return coverage.get(index)[0]; }
+    public long coverageEnd(int index) { return coverage.get(index)[1]; }
 
     public void add(int resource, int device, boolean incoming, boolean estimated, long amount) {
         int channel = (incoming ? 0 : 1) | (estimated ? 2 : 0);

@@ -11,7 +11,6 @@ import net.minecraftforge.fluids.Fluid;
 import net.minecraftforge.fluids.FluidRegistry;
 import net.minecraftforge.fluids.FluidStack;
 import com.aeinspector.core.ResourceDictionary;
-import com.glodblock.github.common.item.ItemFluidDrop;
 import com.glodblock.github.common.item.ItemFluidPacket;
 import com.glodblock.github.common.parts.PartFluidExportBus;
 import com.glodblock.github.common.parts.PartFluidImportBus;
@@ -35,51 +34,57 @@ public final class DeviceCatalog {
     private final FlowRuntime runtime;
     private final Map<Integer, PartUpgradeable> buses = new TreeMap<>();
 
-    public DeviceCatalog(FlowRuntime runtime, InspectorGridCache grid, BitSet visibleResources) {
-        this.runtime = runtime;
-        for (IGridNode node : grid.nodes()) {
-            Object machine = node.getMachine();
-            if (!(machine instanceof PartImportBus || machine instanceof PartExportBus
-                    || machine instanceof PartFluidImportBus || machine instanceof PartFluidExportBus)) continue;
-            PartUpgradeable bus = (PartUpgradeable) machine;
-            int id = runtime.endpoint(bus);
-            if (id == 0) continue;
-            buses.put(id, bus);
-            IInventory filters = bus.getInventoryByName("config");
-            if (bus instanceof PartSharedItemBus && bus.getInstalledUpgrades(Upgrades.ORE_FILTER) > 0) continue;
-            for (int slot = 0; slot < slots(bus, filters); slot++) {
-                ItemStack stack = filters.getStackInSlot(slot);
-                if (stack == null) continue;
-                if (bus instanceof PartFluidImportBus || bus instanceof PartFluidExportBus) {
-                    FluidStack fluid = ItemFluidPacket.getFluidStack(stack);
-                    if (fluid != null) visibleResources.set(runtime.resources.resolve(AEFluidStack.create(fluid)));
-                } else visibleResources.set(runtime.resources.resolve(stack));
-            }
+    public DeviceCatalog(FlowRuntime runtime) { this.runtime = runtime; }
+    public void addNode(IGridNode node, BitSet visibleResources) {
+        Object machine = node.getMachine();
+        if (!(machine instanceof PartImportBus || machine instanceof PartExportBus
+                || machine instanceof PartFluidImportBus || machine instanceof PartFluidExportBus)) return;
+        PartUpgradeable bus = (PartUpgradeable) machine;
+        int id = runtime.endpoint(bus);
+        if (id == 0) return;
+        buses.put(id, bus);
+        IInventory filters = bus.getInventoryByName("config");
+        if (bus instanceof PartSharedItemBus && bus.getInstalledUpgrades(Upgrades.ORE_FILTER) > 0) return;
+        for (int slot = 0; slot < slots(bus, filters); slot++) {
+            ItemStack stack = filters.getStackInSlot(slot);
+            if (stack == null) continue;
+            if (bus instanceof PartFluidImportBus || bus instanceof PartFluidExportBus) {
+                FluidStack fluid = ItemFluidPacket.getFluidStack(stack);
+                if (fluid != null) visibleResources.set(runtime.resources.resolve(AEFluidStack.create(fluid)));
+            } else visibleResources.set(runtime.resources.resolve(stack));
         }
     }
 
-    public BitSet matching(int resource) {
-        BitSet matches = new BitSet();
-        ResourceDictionary.Entry entry = runtime.world.resources.get(resource);
-        ItemStack item = representation(entry);
-        FluidStack fluid = entry.kind == ResourceDictionary.FLUID ? fluid(entry) : null;
-        IItemList<IAEItemStack> candidate = null;
-        if (item != null) {
-            candidate = AEApi.instance().storage().createItemList();
-            candidate.add(AEItemStack.create(item));
+    public Matcher matcher(int resource) { return new Matcher(resource); }
+    public final class Matcher {
+        private final java.util.Iterator<Map.Entry<Integer, PartUpgradeable>> remaining = buses.entrySet().iterator();
+        public final BitSet matches = new BitSet();
+        private final ItemStack item;
+        private final FluidStack fluid;
+        private IItemList<IAEItemStack> candidate;
+        private Matcher(int resource) {
+            ResourceDictionary.Entry entry = runtime.world.resources.get(resource);
+            item = representation(entry);
+            fluid = entry.kind == ResourceDictionary.FLUID ? fluid(entry) : null;
+            if (item != null) {
+                candidate = AEApi.instance().storage().createItemList();
+                candidate.add(AEItemStack.create(item));
+            }
         }
-        for (Map.Entry<Integer, PartUpgradeable> device : buses.entrySet()) {
+        public boolean step() {
+            if (!remaining.hasNext()) return true;
+            Map.Entry<Integer, PartUpgradeable> device = remaining.next();
             PartUpgradeable bus = device.getValue();
             IInventory filters = bus.getInventoryByName("config");
             boolean importBus = bus instanceof PartImportBus || bus instanceof PartFluidImportBus;
             boolean fluidBus = bus instanceof PartFluidImportBus || bus instanceof PartFluidExportBus;
-            if (fluidBus && fluid == null || !fluidBus && item == null) continue;
+            if (fluidBus && fluid == null || !fluidBus && item == null) return false;
             if (bus instanceof PartSharedItemBus && bus.getInstalledUpgrades(Upgrades.ORE_FILTER) > 0) {
                 String expression = ((PartSharedItemBus) bus).getFilter();
                 Predicate<IAEItemStack> predicate = OreFilteredList.makeFilter(expression);
                 if (predicate != null && predicate.test(AEItemStack.create(item))) matches.set(device.getKey());
                 else if (importBus && expression.isEmpty()) matches.set(device.getKey());
-                continue;
+                return false;
             }
             boolean configured = false, matched = false;
             for (int slot = 0; slot < slots(bus, filters); slot++) {
@@ -100,8 +105,8 @@ public final class DeviceCatalog {
                 }
             }
             if (matched || importBus && !configured) matches.set(device.getKey());
+            return false;
         }
-        return matches;
     }
 
     public boolean active(int device) {
