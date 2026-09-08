@@ -14,6 +14,7 @@ public final class InspectorLateMixins implements ILateMixinLoader {
 
     @Override
     public List<String> getMixins(Set<String> loadedMods) {
-        return Arrays.asList("NetworkInventoryMixin", "CraftingCpuMixin", "ItemStorageMonitorMixin", "FluidStorageMonitorMixin", "BusOperationMixin");
+        return Arrays.asList("NetworkInventoryMixin", "CraftingCpuMixin", "ItemStorageMonitorMixin", "FluidStorageMonitorMixin", "BusOperationMixin",
+                "StorageBusAttachmentMixin", "StorageBusTransferMixin");
     }
 }

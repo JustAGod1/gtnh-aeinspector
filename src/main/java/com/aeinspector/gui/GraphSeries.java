@@ -27,8 +27,9 @@ final class GraphSeries {
     }
     double time(int bucket) { return start + (bucket + 0.5) * width; }
     int bucket(double tick) { return (int) Math.floor((tick - start) / width); }
+    /** Per-second rate over the bucket's observed server ticks. */
     double rate(int direction, int bucket) {
-        return observed[bucket] == 0 ? Double.NaN : ((double) counts[direction][bucket] + counts[direction + 2][bucket]) * 1200 / observed[bucket];
+        return observed[bucket] == 0 ? Double.NaN : ((double) counts[direction][bucket] + counts[direction + 2][bucket]) * 20 / observed[bucket];
     }
     /** Keep the still-visible left edge across several responses arriving during one animation. */
     static GraphSeries retain(GraphSeries older,GraphSeries current,double earliest) {

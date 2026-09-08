@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 /** Numeric pair IDs keep both tick counters and disk shards compact. */
 public final class NetworkRecord {
@@ -17,6 +18,7 @@ public final class NetworkRecord {
     private final ArrayList<Long> pairKeys = new ArrayList<>();
     private final ArrayList<long[]> coverage = new ArrayList<>();
     private boolean resumed;
+    private Consumer<NetworkRecord> pairListener;
 
     public NetworkRecord(int id, long started, long[] parents) {
         this.id = id;
@@ -31,8 +33,10 @@ public final class NetworkRecord {
         long next = pairKeys.size();
         pairKeys.add(key);
         pairs.add(key, next + 1);
+        if (pairListener != null) pairListener.accept(this);
         return next;
     }
+    public void setPairListener(Consumer<NetworkRecord> listener) { pairListener = listener; }
 
     public long findPair(int resource, int device) {
         return pairs.get(((long) resource << 32) | (device & 0xffffffffL)) - 1;

@@ -82,4 +82,21 @@ public class GuiInteractionTest {
         assertTrue(new InspectorLayout(340, false).graphHeight > 130);
         assertTrue(new InspectorLayout(600, false).graphHeight > 350);
     }
+    @Test public void expandedResourceTablePreservesGraphsAndDividerDragMatchesRows() {
+        for (int height = 220; height <= 600; height++) {
+            for (int requested : new int[] {0, 2, 6, 10, 20, 40, 1000}) {
+                InspectorLayout layout = new InspectorLayout(height, false, requested);
+                assertTrue(layout.rows >= 2); assertTrue(layout.graphHeight >= 55);
+                assertTrue(layout.dividerY() - 5 >= layout.graphTop + layout.graphHeight);
+                assertTrue(layout.dividerY() + 5 < layout.rowsTop - 13);
+                assertEquals(height - 24, layout.rowsTop + layout.rows * layout.rowHeight);
+                assertEquals(layout.rows, layout.rowsAtDivider(height, layout.dividerY()));
+            }
+        }
+        InspectorLayout expanded = new InspectorLayout(600, false, 20);
+        assertEquals(20, expanded.rows);
+        assertEquals(21, expanded.rowsAtDivider(600, expanded.dividerY() - expanded.rowHeight));
+        assertEquals(19, expanded.rowsAtDivider(600, expanded.dividerY() + expanded.rowHeight));
+        assertEquals(new InspectorLayout(600, false).rows, new InspectorLayout(600, false, 0).rows);
+    }
 }

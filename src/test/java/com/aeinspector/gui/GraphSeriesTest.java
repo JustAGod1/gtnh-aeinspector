@@ -16,14 +16,14 @@ public class GraphSeriesTest {
         tag.setByteArray("c3", InspectorData.longs(new long[] {1, 0, 0}));
         return tag;
     }
-    @Test public void hoverBucketsKeepUnknownSeparateFromObservedZeroAndUsePerMinuteRates() {
+    @Test public void hoverBucketsKeepUnknownSeparateFromObservedZeroAndUsePerSecondRates() {
         GraphSeries graph = new GraphSeries(snapshot());
         assertEquals(102, graph.time(0), 0);
         assertEquals(-1, graph.bucket(99.9));
         assertEquals(0, graph.bucket(103.9));
         assertEquals(1, graph.bucket(104));
-        assertEquals(3600, graph.rate(0, 0), 0);
-        assertEquals(1800, graph.rate(1, 0), 0);
+        assertEquals(60, graph.rate(0, 0), 0);
+        assertEquals(30, graph.rate(1, 0), 0);
         assertTrue(Double.isNaN(graph.rate(0, 1)));
         assertEquals(0, graph.rate(0, 2), 0);
     }

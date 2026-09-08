@@ -8,6 +8,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Set;
+import java.util.WeakHashMap;
+import java.util.function.Consumer;
 import net.minecraft.nbt.NBTTagCompound;
 
 import com.aeinspector.core.DeviceDictionary;
@@ -21,6 +25,11 @@ public final class WorldStatistics implements AutoCloseable {
     public final SeriesDatabase database;
     private final SegmentStore metadata;
     private final ArrayList<NetworkRecord> networks = new ArrayList<>();
+    // Indices held by viewers/caches stay subscribed. Evicted indices must not be retained by the world.
+    private final Set<Consumer<NetworkRecord>> pairListeners = Collections.newSetFromMap(new WeakHashMap<Consumer<NetworkRecord>, Boolean>());
+    private final Consumer<NetworkRecord> pairChanged = record -> {
+        for (Consumer<NetworkRecord> listener : pairListeners) listener.accept(record);
+    };
     private long tick;
     private long reservedUntil;
     private int savedResources, savedDevices, savedNetworks, savedPairs;
@@ -43,6 +52,7 @@ public final class WorldStatistics implements AutoCloseable {
             for (int i = 0; i < count; i++) {
                 NetworkRecord record = NetworkRecord.read(in);
                 if (record.id != i) throw new IOException("Invalid network ID");
+                record.setPairListener(pairChanged);
                 networks.add(record);
             }
             if (in.read() != -1) throw new IOException("Trailing dictionary data");
@@ -73,6 +83,7 @@ public final class WorldStatistics implements AutoCloseable {
                 for (int i = 0; i < count; i++) {
                     NetworkRecord record = NetworkRecord.read(in);
                     if (record.id != i) throw new IOException("Invalid network ID");
+                    record.setPairListener(pairChanged);
                     networks.add(record);
                 }
                 if (in.read() != -1) throw new IOException("Trailing world metadata");
@@ -91,10 +102,12 @@ public final class WorldStatistics implements AutoCloseable {
     public long tick() { return tick; }
     public int networkCount() { return networks.size(); }
     public NetworkRecord network(int id) { return networks.get(id); }
+    public void listenForPairs(Consumer<NetworkRecord> listener) { pairListeners.add(listener); }
 
     public NetworkRecord createNetwork(long... parents) {
         for (long parent : parents) if (parent < 0 || parent >= networks.size()) throw new IllegalArgumentException("Parent");
         NetworkRecord result = new NetworkRecord(networks.size(), tick, parents);
+        result.setPairListener(pairChanged);
         networks.add(result);
         return result;
     }
@@ -153,5 +166,6 @@ public final class WorldStatistics implements AutoCloseable {
         checkpoint();
         database.close();
         if (metadata != null) metadata.close();
+        pairListeners.clear();
     }
 }

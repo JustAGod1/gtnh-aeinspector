@@ -33,6 +33,7 @@ public final class FlowRuntime {
     public final TransferTracker transfers;
     public final BusTransferScope busTransfers;
     public final com.aeinspector.gui.InspectorQueries queries;
+    public final StorageBusObservers storageBuses;
     private final IdentityHashMap<IActionHost, Integer> endpoints = new IdentityHashMap<>();
 
     private FlowRuntime(WorldServer overworld) {
@@ -49,6 +50,7 @@ public final class FlowRuntime {
                 world.network((int) network).add(resource, device, incoming, false, amount));
         transfers = new TransferTracker(busTransfers);
         queries = new com.aeinspector.gui.InspectorQueries(this);
+        storageBuses = new StorageBusObservers(this);
     }
 
     public static FlowRuntime get() {
@@ -73,11 +75,11 @@ public final class FlowRuntime {
     public static void close() {
         if (active == null) return;
         // The world's MapStorage owns saving and lifetime; don't write after its save handler has closed.
-        active.savedData.markDirty(); active.queries.close(); active = null;
+        active.savedData.markDirty(); active.queries.close(); active.storageBuses.close(); active = null;
     }
 
     public void endTick() {
-        try { world.endTick(); savedData.markDirty(); queries.tick(); }
+        try { storageBuses.tick(); world.endTick(); savedData.markDirty(); queries.tick(); }
         catch (IOException e) { throw new UncheckedIOException("Cannot record AE Inspector tick", e); }
     }
 
@@ -105,7 +107,7 @@ public final class FlowRuntime {
         return id;
     }
 
-    public void forget(IActionHost host) { endpoints.remove(host); }
+    public void forget(IActionHost host) { endpoints.remove(host); storageBuses.forget(host); }
 
     public NetworkRecord network(IGrid grid) {
         InspectorGridCache cache = grid.getCache(InspectorGridCache.class);

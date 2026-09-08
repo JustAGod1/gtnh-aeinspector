@@ -113,4 +113,52 @@ public class HistoryIndexTest {
             assertEquals(999, read.count(true));
         }
     }
+    @Test public void estimatedStorageBusFlowsRemainSeparateIoRowsAfterRestart() throws Exception {
+        net.minecraft.nbt.NBTTagCompound saved = new net.minecraft.nbt.NBTTagCompound();
+        int flower, storageBus, consumer, root;
+        try (WorldStatistics world = new WorldStatistics()) {
+            flower = world.resources.resolve(ResourceDictionary.ITEM, "test:glowflower", 3, null);
+            storageBus = world.devices.resolve(180, -8, 66, 88, 3, "appeng.parts.misc.PartStorageBus", "ME Storage Bus");
+            consumer = world.devices.resolve(180, 45, 65, 52, 2, "test:consumer", "Stocking Input Bus");
+            NetworkRecord first = world.createNetwork(); first.observe(0);
+            first.add(flower, storageBus, true, true, 2005); first.add(flower, consumer, false, false, 99);
+            world.endTick(); root = world.createNetwork(first.id).id; world.writeNBT(saved);
+        }
+        try (WorldStatistics restored = new WorldStatistics(saved)) {
+            HistoryIndex index = new HistoryIndex(restored, root); prepare(index);
+            assertEquals(storageBus, index.firstDevice(flower, 0));
+            assertEquals(consumer, index.firstDevice(flower, storageBus + 1));
+            HistoryIndex.Coverage c = coverage(index, restored.tick());
+            HistoryIndex.Read bus = complete(index.read(flower, storageBus, 8, restored.tick(), false, c));
+            HistoryIndex.Read total = complete(index.read(flower, -1, 8, restored.tick(), false, c));
+            assertEquals(2005, bus.count(true)); assertEquals(2005, bus.counts[2]);
+            assertEquals(total.count(true), bus.count(true)); assertEquals(0, bus.count(false));
+            int newlyConnected = restored.devices.resolve(180, 3, 4, 5, 2, "appeng.parts.misc.PartStorageBus", "ME Storage Bus");
+            restored.network(0).add(flower, newlyConnected, true, true, 7); restored.endTick();
+            prepare(index);
+            assertEquals(newlyConnected, index.firstDevice(flower, consumer + 1));
+            assertEquals(7, complete(index.read(flower, newlyConnected, 8, restored.tick(), false,
+                    coverage(index, restored.tick()))).count(true));
+        }
+    }
+    @Test public void resumedAncestorCannotAddToGraphWithoutAddingItsNewStorageBusToIo() throws Exception {
+        try (WorldStatistics world = new WorldStatistics()) {
+            int flower = world.resources.resolve(ResourceDictionary.ITEM, "test:glowflower", 3, null);
+            NetworkRecord ancestor = world.createNetwork(); ancestor.observe(0);
+            ancestor.add(flower, 1, false, false, 10); world.endTick();
+            NetworkRecord root = world.createNetwork(ancestor.id);
+            HistoryIndex index = new HistoryIndex(world, root.id); prepare(index);
+            NetworkRecord unrelated = world.createNetwork();
+            unrelated.add(flower, 99, true, true, 100);
+            assertTrue(index.ready()); // changes in another network must not refresh this index
+            // A restored grid segment can be reused by InspectorGridCache.onJoin while another index refers to it.
+            ancestor.observe(world.tick()); ancestor.add(flower, 574, true, true, 2005); world.endTick();
+            prepare(index);
+            HistoryIndex.Coverage c = coverage(index, world.tick());
+            assertEquals(2005, complete(index.read(flower, -1, 8, world.tick(), false, c)).count(true));
+            assertEquals(574, index.firstDevice(flower, 2));
+            assertEquals(2005, complete(index.read(flower, 574, 8, world.tick(), false, c)).count(true));
+            assertEquals(2, index.walkedNetworks()); // no repeated ancestry scan to discover a new endpoint
+        }
+    }
 }

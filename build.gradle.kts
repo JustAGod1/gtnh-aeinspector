@@ -3,7 +3,7 @@ plugins {
     id("com.gtnewhorizons.gtnhconvention")
 }
 
-version = "0.1.6"
+version = "0.1.10"
 base { archivesName.set("AE-Inspector") }
 
 // Opt-in development harness; never included in the shipped mod JAR.

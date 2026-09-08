@@ -9,6 +9,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import java.util.function.Consumer;
 import com.aeinspector.core.NetworkRecord;
 import com.aeinspector.core.TimeSeries;
 
@@ -22,17 +25,24 @@ public final class HistoryIndex {
     private final TreeMap<Long, Long> observations = new TreeMap<>();
     private final BitSet resources = new BitSet();
     private final Map<Integer, BitSet> devices = new HashMap<>();
+    private final Set<NetworkRecord> changedPairs = new LinkedHashSet<>();
+    private final int[] indexedPairs;
+    private final Consumer<NetworkRecord> pairChanges = record -> {
+        if (visited.get(record.id)) changedPairs.add(record);
+    };
     private NetworkRecord reading;
-    private int parent, pair, interval, rootPairs;
+    private int parent, pair, interval;
     private boolean ready;
     private long intervalStart = -1, intervalEnd;
     private int walked;
 
     public HistoryIndex(WorldStatistics world, int network) {
         this.world = world; root = world.network(network);
+        indexedPairs = new int[world.networkCount()];
         visited.set(root.id); reading = root;
+        world.listenForPairs(pairChanges);
     }
-    public boolean ready() { return ready && rootPairs == root.pairCount(); }
+    public boolean ready() { return ready && changedPairs.isEmpty() && indexedPairs[root.id] == root.pairCount(); }
     public int walkedNetworks() { return walked; }
     public int firstResource(int from) { return resources.nextSetBit(from); }
     public int firstDevice(int resource, int from) {
@@ -46,8 +56,15 @@ public final class HistoryIndex {
             if (!pending.isEmpty()) {
                 reading = world.network(pending.removeFirst()); parent = pair = interval = 0;
             } else {
+                if (indexedPairs[root.id] < root.pairCount()) { indexPair(root, indexedPairs[root.id]); return false; }
+                if (!changedPairs.isEmpty()) {
+                    NetworkRecord changed = changedPairs.iterator().next();
+                    int next = indexedPairs[changed.id];
+                    if (next < changed.pairCount()) indexPair(changed, next);
+                    else changedPairs.remove(changed);
+                    return false;
+                }
                 ready = true;
-                if (rootPairs < root.pairCount()) { indexPair(root, rootPairs++); return false; }
                 return true;
             }
         }
@@ -58,7 +75,6 @@ public final class HistoryIndex {
         }
         if (pair < reading.pairCount()) {
             indexPair(reading, pair++);
-            if (reading == root) rootPairs = pair;
             return false;
         }
         // The current segment keeps changing. Its coverage is read live; ancestors are completed segments.
@@ -70,6 +86,8 @@ public final class HistoryIndex {
         return false;
     }
     private void indexPair(NetworkRecord record, int pair) {
+        if (pair < indexedPairs[record.id]) return;
+        indexedPairs[record.id] = pair + 1;
         long key = record.pairKey(pair);
         int resource = (int) (key >>> 32), device = (int) key;
         resources.set(resource);

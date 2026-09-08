@@ -40,7 +40,8 @@ public final class InspectorScreen extends GuiContainer {
     private InspectorLayout.Controls controls;
     private SnapshotBatch receiving;
     private NBTTagList deferredRows;
-    private boolean refreshNeeded, resizeNeeded, dragging;
+    private boolean refreshNeeded, resizeNeeded, dragging, resizingTable;
+    private int dividerGrab;
     private int scaleOverride, scaleFactor;
     private int dragOffset, dragGrab, mouseX, mouseY;
     private long searchDue, lastFrame, frameNow, lastSnapshot;
@@ -61,7 +62,7 @@ public final class InspectorScreen extends GuiContainer {
     }
     @Override public void initGui() {
         xSize=Math.min(900,width-20); ySize=Math.min(600,height-20); super.initGui();
-        layout=new InspectorLayout(ySize,devicesView); request.rows=layout.rows;
+        layout=new InspectorLayout(ySize,devicesView,InspectorClientSettings.tableRows(mc.mcDataDir)); request.rows=Math.min(layout.rows,InspectorProtocol.PAGE_SIZE);
         Keyboard.enableRepeatEvents(true);
         controls=new InspectorLayout.Controls(xSize);
         search=new GuiTextField(fontRendererObj,guiLeft+12,guiTop+30,controls.searchWidth,16);
@@ -78,7 +79,7 @@ public final class InspectorScreen extends GuiContainer {
             button(20+i,left,54,right-left-3,18,i==8?tr("all"):SCALES[i]);
         }
         if(!devicesView) for(int i=0;i<layout.rows;i++) button(100+i,rowsRight()-32,layout.rowsTop+i*layout.rowHeight+1,30,layout.rowHeight-2,"I/O");
-        refreshNeeded=data.hasNoTags()&&!requests.pending(); dragging=false;
+        refreshNeeded=data.hasNoTags()&&!requests.pending(); dragging=false; resizingTable=false;
         if(deferredRows!=null) { replaceRows(deferredRows); deferredRows=null; }
         if(!data.hasNoTags()) scrollTo(offset());
         refreshControls();
@@ -141,7 +142,7 @@ public final class InspectorScreen extends GuiContainer {
             data=next; failure=null;
             if(request.selected.length==0) request.selected=next.getIntArray("selected");
             NBTTagList updated=next.getTagList(devicesView?"devices":"resources",10);
-            if(dragging) deferredRows=updated; else replaceRows(updated);
+            if(dragging||resizingTable) deferredRows=updated; else replaceRows(updated);
         } catch(IOException|IllegalArgumentException e) { receiving=null; failure=tr("read_error"); }
         refreshControls();
     }
@@ -152,7 +153,7 @@ public final class InspectorScreen extends GuiContainer {
             resizeNeeded=true; return;
         }
         if(b.id==7) { InspectorProtocol.CHANNEL.sendToServer(copyRequest()); return; }
-        if(requests.pending()||dragging) return;
+        if(requests.pending()||dragging||resizingTable) return;
         if(b.id>=100) {
             NBTTagCompound row=rows().getCompoundTagAt(b.id-100); InspectorProtocol.Request next=copyRequest();
             next.selected=new int[]{row.getInteger("id")}; next.deviceOffset=0;
@@ -193,16 +194,20 @@ public final class InspectorScreen extends GuiContainer {
     @Override public void handleMouseInput() {
         super.handleMouseInput(); int wheel=Mouse.getEventDWheel();
         int x=Mouse.getEventX()*width/mc.displayWidth-guiLeft,y=height-Mouse.getEventY()*height/mc.displayHeight-1-guiTop;
-        if(wheel!=0&&!dragging&&x>=8&&x<xSize-6&&y>=layout.rowsTop&&y<layout.rowsTop+trackHeight()) scrollTo(offset()+(wheel>0?-1:1));
+        if(wheel!=0&&!dragging&&!resizingTable&&x>=8&&x<xSize-6&&y>=layout.rowsTop&&y<layout.rowsTop+trackHeight()) scrollTo(offset()+(wheel>0?-1:1));
     }
     @Override protected void mouseClicked(int mx,int my,int button) {
         int x=mx-guiLeft,y=my-guiTop;
+        if(!devicesView&&x>=10&&x<xSize-10&&Math.abs(y-layout.dividerY())<=5) {
+            if(button==0) { resizingTable=true; dividerGrab=y-layout.dividerY(); return; }
+            if(button==1) { resizeTable(0); InspectorClientSettings.setTableRows(0); return; }
+        }
         if(button==0&&x>=trackLeft()-2&&x<xSize-4&&y>=layout.rowsTop&&y<layout.rowsTop+trackHeight()&&count()>layout.rows) {
             int thumb=thumbTop(); dragGrab=y>=thumb&&y<thumb+thumbHeight()?y-thumb:thumbHeight()/2;
             dragging=true; dragOffset=offset(); dragAt(y); return;
         }
         super.mouseClicked(mx,my,button);
-        if(mc.currentScreen!=this||resizeNeeded||requests.pending()||dragging) return;
+        if(mc.currentScreen!=this||resizeNeeded||requests.pending()||dragging||resizingTable) return;
         if(!devicesView) search.mouseClicked(mx,my,button);
         if(button!=0||y<layout.rowsTop||y>=layout.rowsTop+trackHeight()||x<10||x>=rowsRight()) return;
         int index=(y-layout.rowsTop)/layout.rowHeight; if(index>=rows().tagCount()) return;
@@ -226,9 +231,26 @@ public final class InspectorScreen extends GuiContainer {
         dragOffset=ScrollWindow.at((y-layout.rowsTop-dragGrab)/(double)Math.max(1,trackHeight()-thumbHeight()),count(),layout.rows);
         scrollTo(dragOffset);
     }
-    @Override protected void mouseClickMove(int mx,int my,int button,long held) { if(dragging) dragAt(my-guiTop); else super.mouseClickMove(mx,my,button,held); }
+    private void resizeTable(int wantedRows) {
+        InspectorLayout next=new InspectorLayout(ySize,false,wantedRows);
+        if(next.rows==layout.rows) return;
+        layout=next; request.rows=Math.min(layout.rows,InspectorProtocol.PAGE_SIZE);
+        for(java.util.Iterator<?> it=buttonList.iterator();it.hasNext();) if(((GuiButton)it.next()).id>=100) it.remove();
+        for(int i=0;i<layout.rows;i++) button(100+i,rowsRight()-32,layout.rowsTop+i*layout.rowHeight+1,30,layout.rowHeight-2,"I/O");
+        scrollTo(offset()); refreshControls();
+    }
+    @Override protected void mouseClickMove(int mx,int my,int button,long held) {
+        if(resizingTable) resizeTable(layout.rowsAtDivider(ySize,my-guiTop-dividerGrab));
+        else if(dragging) dragAt(my-guiTop); else super.mouseClickMove(mx,my,button,held);
+    }
     @Override protected void mouseMovedOrUp(int mx,int my,int button) {
         super.mouseMovedOrUp(mx,my,button);
+        if(resizingTable&&button==0) {
+            resizeTable(layout.rowsAtDivider(ySize,my-guiTop-dividerGrab)); resizingTable=false;
+            InspectorClientSettings.setTableRows(layout.rows);
+            if(deferredRows!=null) { replaceRows(deferredRows); deferredRows=null; }
+            refreshControls(); return;
+        }
         if(dragging&&button==0) {
             dragAt(my-guiTop); dragging=false;
             if(deferredRows!=null) { replaceRows(deferredRows); deferredRows=null; }
@@ -248,7 +270,7 @@ public final class InspectorScreen extends GuiContainer {
             text(status,statusRight-statusWidth,8,statusWidth,requests.pending()?0xf2c879:0x69dfb6);
             if(!devicesView) {
                 search.drawTextBox(); if(search.getText().isEmpty()&&!search.isFocused()) text(tr("search_hint"),16,34,controls.searchWidth-8,0x657e8e);
-                updateAxis(); drawChart(0); drawChart(1);
+                updateAxis(); drawChart(0); drawChart(1); drawDivider();
             } else text(tr("highlight_hint"),88,34,xSize-196,0x93adbd);
             drawRows();
             if(requests.pending()) {
@@ -288,6 +310,13 @@ public final class InspectorScreen extends GuiContainer {
         int start=dragging?dragOffset:offset(); String range=count()==0?"0 / 0":(start+1)+"–"+Math.min(count(),start+layout.rows)+" / "+count();
         text(range,12,ySize-16,100,0x94adbc);
         text(tr("scroll_hint"),118,ySize-16,xSize-130,0x6f8b9d);
+    }
+    private void drawDivider() {
+        int y=layout.dividerY();
+        boolean hover=mouseX>=guiLeft+10&&mouseX<guiLeft+xSize-10&&Math.abs(mouseY-guiTop-y)<=5;
+        rect(12,y,xSize-12,y+1,hover||resizingTable?0xff649ca9:0xff304651);
+        rect(xSize/2-22,y-3,xSize/2+22,y+4,0xff203641);
+        for(int line=y-2;line<=y+2;line+=2) rect(xSize/2-12,line,xSize/2+12,line+1,hover||resizingTable?0xff9de2d4:0xff739ba8);
     }
     private void quantity(NBTTagCompound row,String key,int x,int y,int w,double maximum,int color) {
         if(w<=0) return;
@@ -342,7 +371,7 @@ public final class InspectorScreen extends GuiContainer {
             text(number(maximum*(divisions-i)/divisions),x+3,y-3,axisWidth()-8,0x7895a7);
         }
         for(int i=0;i<=4;i++) { int line=left+(right-left)*i/4; rect(line,top,line+1,bottom,0xff1a2c38); }
-        text("/"+tr("minute_short"),x+3,layout.graphTop+3,axisWidth()-5,0x7895a7);
+        text("/"+tr("second_short"),x+3,layout.graphTop+3,axisWidth()-5,0x7895a7);
         drawLegend(left,layout.graphTop+3,right-left);
         for(int i=0;i<=2;i++) {
             if(i==1&&right-left<130) continue;
@@ -424,6 +453,9 @@ public final class InspectorScreen extends GuiContainer {
     }
     private void drawInspector(int mx,int my,float partial) {
         super.drawScreen(mx,my,partial); int x=mx-guiLeft,y=my-guiTop;
+        if(!devicesView&&!resizingTable&&x>=10&&x<xSize-10&&Math.abs(y-layout.dividerY())<=5) {
+            drawHoveringText(Arrays.asList(tr("resize_table"),tr("reset_table")),mx,my,fontRendererObj); return;
+        }
         if(x>=controls.scaleLeft&&x<xSize-12&&y>=29&&y<48) {
             drawHoveringText(Arrays.asList(tr("gui_scale_hint"),tr("gui_scale_cycle")),mx,my,fontRendererObj); return;
         }
@@ -439,12 +471,12 @@ public final class InspectorScreen extends GuiContainer {
                     tip.add(series.name+" #"+series.id);
                     if(series.observed[bucket]==0) { tip.add(tr("unobserved")); continue; }
                     String unit=series.fluid?"mB":tr("items");
-                    tip.add(number(series.rate(direction,bucket))+" "+unit+"/"+tr("minute_short")+" · "+tr("exact")+" "+series.counts[direction][bucket]+" · ~"+series.counts[direction+2][bucket]);
+                    tip.add(number(series.rate(direction,bucket))+" "+unit+"/"+tr("second_short")+" · "+tr("exact")+" "+series.counts[direction][bucket]+" · ~"+series.counts[direction+2][bucket]);
                 }
                 if(tip.size()>1) drawHoveringText(tip,mx,my,fontRendererObj); return;
             }
         }
-        if(x<10||x>=rowsRight()||y<layout.rowsTop||y>=layout.rowsTop+trackHeight()||dragging) return;
+        if(x<10||x>=rowsRight()||y<layout.rowsTop||y>=layout.rowsTop+trackHeight()||dragging||resizingTable) return;
         int index=(y-layout.rowsTop)/layout.rowHeight; if(index>=rows().tagCount()) return;
         NBTTagCompound row=rows().getCompoundTagAt(index); String unit=(devicesView?data.getCompoundTag("deviceResource"):row).getBoolean("fluid")?"mB":tr("items");
         List<String> tip=new ArrayList<>(); tip.add(devicesView&&row.getInteger("id")==0?tr("unknown_source"):row.getString("name"));
@@ -461,11 +493,13 @@ public final class InspectorScreen extends GuiContainer {
                 tip.add(tr("exact")+" +"+totals[0]+" / -"+totals[1]); tip.add(tr("estimated")+" +"+totals[2]+" / -"+totals[3]);
             }
             if(row.getBoolean("configured")) tip.add(tr("configured"));
+            if(row.getBoolean("stored")) tip.add(tr("stored_here"));
             tip.add(tr(row.getBoolean("active")?"node_online":"node_offline"));
         } else { tip.add(row.getString("registry")+":"+row.getInteger("meta")+" #"+row.getInteger("id")); tip.add(tr(x>=rowsRight()-34?"io_hint":"click_hint")); }
         drawHoveringText(tip,mx,my,fontRendererObj);
     }
     @Override public void onGuiClosed() {
+        if(resizingTable) InspectorClientSettings.setTableRows(layout.rows);
         receiving=null; deferredRows=null; InspectorProtocol.closeSnapshots();
         Keyboard.enableRepeatEvents(false); super.onGuiClosed();
     }

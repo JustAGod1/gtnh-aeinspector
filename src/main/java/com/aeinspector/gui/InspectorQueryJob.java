@@ -72,6 +72,7 @@ final class InspectorQueryJob implements GuiWorkQueue.Task {
     @Override public boolean step() throws Exception {
         if (!active.getAsBoolean()) return true;
         if (gridCache.nodeVersion() != nodeVersion || gridCache.record().id != index.root.id) throw new Changed();
+        if (stage != Stage.INDEX && !index.ready()) { index.step(); return false; }
         if (stream.needsFlush()) { stream.flush(); return false; }
         switch (stage) {
             case INDEX:
@@ -190,7 +191,8 @@ final class InspectorQueryJob implements GuiWorkQueue.Task {
         tag.setInteger("id", id); tag.setInteger("dim", device.dimension);
         tag.setInteger("x", device.x); tag.setInteger("y", device.y); tag.setInteger("z", device.z);
         tag.setInteger("side", device.side); tag.setString("name", device.name);
-        tag.setBoolean("configured", matcher.matches.get(id)); tag.setBoolean("active", catalog.active(id));
+        tag.setBoolean("configured", matcher.configured.get(id)); tag.setBoolean("stored", matcher.stored.get(id));
+        tag.setBoolean("active", catalog.active(id));
         tag.setLong("in", data.count(true)); tag.setLong("out", data.count(false));
         tag.setDouble("inRate", data.rate(true)); tag.setDouble("outRate", data.rate(false));
         tag.setByteArray("windowCounts", InspectorData.longs(data.counts)); tag.setByteArray("totals", InspectorData.longs(data.totals));

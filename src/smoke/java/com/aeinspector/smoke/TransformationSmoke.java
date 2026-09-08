@@ -26,6 +26,9 @@ public final class TransformationSmoke {
                 "appeng.me.storage.NetworkInventoryHandler",
                 "appeng.me.cluster.implementations.CraftingCPUCluster",
                 "appeng.me.storage.MEMonitorIInventory",
+                "appeng.me.storage.MEInventoryHandler",
+                "appeng.parts.misc.PartStorageBus",
+                "com.glodblock.github.common.parts.PartFluidStorageBus",
                 "com.glodblock.github.inventory.MEMonitorIFluidHandler",
                 "appeng.parts.automation.PartImportBus",
                 "appeng.parts.automation.PartExportBus",
@@ -38,6 +41,12 @@ public final class TransformationSmoke {
                 int handlers = 0;
                 for (Method method : type.getDeclaredMethods()) if (method.getName().contains("aeinspector$")) handlers++;
                 if (handlers == 0) throw new AssertionError("No injected handlers in " + target);
+                if (target.equals("appeng.parts.misc.PartStorageBus")
+                        || target.equals("com.glodblock.github.common.parts.PartFluidStorageBus")) {
+                    Class<?> access = Class.forName("com.aeinspector.integration.StorageBusAccess", false, Launch.classLoader);
+                    if (!access.isAssignableFrom(type)) throw new AssertionError("Missing StorageBusAccess on " + target);
+                    type.getMethod("aeinspector$getStorageHandler");
+                }
                 lines.add("PASS " + target + " injected handlers=" + handlers);
             }
             lines.add("PASS transformed all requested targets using the actual Forge launch class loader");
