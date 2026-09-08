@@ -22,24 +22,27 @@ public final class InspectorProtocol {
     public static final int PAGE_SIZE = 10;
     public static final SimpleNetworkWrapper CHANNEL = NetworkRegistry.INSTANCE.newSimpleChannel("aeinspector");
     private static final ConcurrentHashMap<EntityPlayerMP, Request> REQUESTS = new ConcurrentHashMap<>();
-    private static final SnapshotBatch.Inbox RESPONSE = new SnapshotBatch.Inbox();
+    private static final ConcurrentHashMap<EntityPlayerMP, Request> DEVICE_REQUESTS = new ConcurrentHashMap<>();
+    private static final SnapshotViews RESPONSE = new SnapshotViews();
 
     private InspectorProtocol() {}
     public static void register() {
         CHANNEL.registerMessage(RequestHandler.class, Request.class, 0, Side.SERVER);
         CHANNEL.registerMessage(SnapshotHandler.class, Snapshot.class, 1, Side.CLIENT);
     }
-    public static Request take(EntityPlayerMP player) { return REQUESTS.remove(player); }
-    public static void forget(EntityPlayerMP player) { REQUESTS.remove(player); }
-    public static void clear() { REQUESTS.clear(); RESPONSE.clear(); }
-    static SnapshotBatch takeSnapshot() { return RESPONSE.take(); }
-    static void expectSnapshot(int window, int sequence) { RESPONSE.expect(window, sequence); }
+    public static Request take(EntityPlayerMP player, boolean devices) { return (devices ? DEVICE_REQUESTS : REQUESTS).remove(player); }
+    public static void forget(EntityPlayerMP player) { REQUESTS.remove(player); DEVICE_REQUESTS.remove(player); }
+    public static void clear() { REQUESTS.clear(); DEVICE_REQUESTS.clear(); RESPONSE.close(); }
+    static SnapshotBatch takeSnapshot(boolean devices) { return RESPONSE.take(devices); }
+    static void expectSnapshot(boolean devices, int window, int sequence) { RESPONSE.expect(devices, window, sequence); }
+    static void closeSnapshots(boolean devices) { RESPONSE.close(devices); }
     static void closeSnapshots() { RESPONSE.close(); }
 
     public static final class Request implements IMessage {
         public int window, level, resourceOffset, deviceOffset, sort, sequence, filter;
         public int rows = PAGE_SIZE;
         public boolean devices;
+        public boolean subscribe = true;
         public String search = "";
         public int[] selected = new int[0];
         public Request() {}
@@ -49,7 +52,7 @@ public final class InspectorProtocol {
             out.writeByte(selected.length);
             for (int id : selected) out.writeInt(id);
             out.writeByte(sort);
-            out.writeInt(sequence); out.writeByte(rows); out.writeBoolean(devices); out.writeByte(filter);
+            out.writeInt(sequence); out.writeByte(rows); out.writeBoolean(devices); out.writeByte(filter); out.writeBoolean(subscribe);
         }
         @Override public void fromBytes(ByteBuf in) {
             if (in.readableBytes() > 600) throw new IllegalArgumentException("Oversized inspector request");
@@ -68,13 +71,14 @@ public final class InspectorProtocol {
             }
             sort = in.readUnsignedByte();
             sequence = in.readInt(); rows = in.readUnsignedByte(); devices = in.readBoolean(); filter = in.readUnsignedByte();
+            subscribe = in.readBoolean();
             if (sort > 2 || filter > ResourceFilter.FLUIDS || sequence < 0 || rows < 1 || rows > PAGE_SIZE || in.isReadable()) throw new IllegalArgumentException("Invalid request options");
         }
         public Request copy() {
             Request copy = new Request();
             copy.window = window; copy.level = level; copy.resourceOffset = resourceOffset; copy.deviceOffset = deviceOffset;
             copy.sort = sort; copy.sequence = sequence; copy.rows = rows; copy.devices = devices; copy.filter = filter;
-            copy.search = search; copy.selected = selected.clone(); return copy;
+            copy.search = search; copy.selected = selected.clone(); copy.subscribe = subscribe; return copy;
         }
     }
     public static final class Snapshot implements IMessage {
@@ -108,8 +112,8 @@ public final class InspectorProtocol {
     }
     public static final class RequestHandler implements IMessageHandler<Request, IMessage> {
         @Override public IMessage onMessage(Request request, MessageContext context) {
-            // Latest request replaces older ones: at most one pending request per connected player.
-            REQUESTS.put(context.getServerHandler().playerEntity, request);
+            // At most one pending revision per view; opening I/O must not discard the statistics subscription.
+            (request.devices ? DEVICE_REQUESTS : REQUESTS).put(context.getServerHandler().playerEntity, request);
             return null;
         }
     }

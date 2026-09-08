@@ -13,6 +13,7 @@ aeinspector.choose_resource=Select a resource below
 aeinspector.devices=Devices
 aeinspector.devices_for=I/O devices for:
 aeinspector.back=Back
+aeinspector.back_hint=Back to statistics: Esc or the mouse Back button
 aeinspector.all=All
 aeinspector.now=now
 aeinspector.minute_short=min

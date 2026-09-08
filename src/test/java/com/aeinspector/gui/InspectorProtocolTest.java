@@ -24,6 +24,7 @@ public class InspectorProtocolTest {
         assertEquals(source.sequence, target.sequence);
         assertEquals(source.rows, target.rows);
         assertEquals(source.devices, target.devices);
+        assertEquals(source.subscribe, target.subscribe);
         assertEquals(source.filter, target.filter);
         assertEquals(source.search, target.search);
         assertArrayEquals(source.selected, target.selected);
@@ -42,6 +43,16 @@ public class InspectorProtocolTest {
         ByteBuf huge = Unpooled.buffer().writeZero(601);
         assertThrows(IllegalArgumentException.class, () -> new InspectorProtocol.Request().fromBytes(huge));
         huge.release();
+    }
+    @Test public void unsubscribeRoundTripTargetsOnlyTheIoRevision() {
+        InspectorProtocol.Request source = new InspectorProtocol.Request();
+        source.window = 7; source.devices = true; source.subscribe = false; source.sequence = 109;
+        ByteBuf bytes = Unpooled.buffer();
+        try {
+            source.toBytes(bytes); InspectorProtocol.Request target = new InspectorProtocol.Request(); target.fromBytes(bytes);
+            assertTrue(target.devices); assertFalse(target.subscribe); assertEquals(109, target.sequence); assertEquals(7, target.window);
+            assertFalse(target.copy().subscribe);
+        } finally { bytes.release(); }
     }
     @Test public void snapshotPreservesLongCounts() throws Exception {
         NBTTagCompound data = new NBTTagCompound();

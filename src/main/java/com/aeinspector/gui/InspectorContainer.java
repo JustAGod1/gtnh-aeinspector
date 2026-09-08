@@ -13,12 +13,9 @@ import com.aeinspector.integration.FlowRuntime;
 public final class InspectorContainer extends Container {
     private final EntityPlayer player;
     private final WirelessSession session;
-    private InspectorProtocol.Request request = new InspectorProtocol.Request();
+    private final GuiSubscription statistics = new GuiSubscription(), devices = new GuiSubscription();
     private int age;
-    private int nextRefresh;
-    private int responseBatch;
-    private boolean failureReported, requested, closed;
-    private GuiWorkQueue.Ticket work;
+    private boolean failureReported, closed;
 
     public InspectorContainer(EntityPlayer player, int slot) {
         this.player = player;
@@ -51,36 +48,35 @@ public final class InspectorContainer extends Container {
         if (age % 11 == 0 && !session.drain(11)) {
             reportFailure("aeinspector.no_power"); player.closeScreen(); return;
         }
-        InspectorProtocol.Request latest = InspectorProtocol.take((EntityPlayerMP) player);
-        if (latest != null && latest.window == windowId && (!requested || latest.sequence > request.sequence)) {
-            cancelWork(); request = latest.copy(); requested = true; nextRefresh = age;
-        } else if (latest != null && latest.window == windowId && latest.sequence == request.sequence && work == null) {
-            nextRefresh = age; // Retry a completed/lost response; never restart an already running query.
-        }
-        if (closed || !requested || work != null || age < nextRefresh) return;
+        update(statistics, false); update(devices, true);
+    }
+    private void update(GuiSubscription view, boolean io) {
+        InspectorProtocol.Request latest = InspectorProtocol.take((EntityPlayerMP) player, io);
+        if (latest != null && latest.window == windowId) view.accept(latest, age);
+        if (closed || !view.ready(age)) return;
         FlowRuntime runtime = FlowRuntime.get();
         if (runtime == null) return;
+        InspectorProtocol.Request request = view.request;
         request.window = windowId;
         int sequence = request.sequence;
-        SnapshotStream stream = new SnapshotStream(windowId, sequence, ++responseBatch,
+        SnapshotStream stream = new SnapshotStream(windowId, sequence, ++view.responseBatch,
                 packet -> InspectorProtocol.CHANNEL.sendTo(packet, (EntityPlayerMP) player));
-        work = runtime.queries.work.submit(new InspectorQueryJob(runtime, session.grid(), request, stream,
-                () -> !closed && player.openContainer == this && request.sequence == sequence,
+        view.work = runtime.queries.work.submit(new InspectorQueryJob(runtime, session.grid(), request, stream,
+                () -> !closed && player.openContainer == this && view.active(sequence),
                 data -> {
-                    work = null; nextRefresh = age + 20;
+                    view.work = null; view.nextRefresh = age + 20;
                     if (request.selected.length == 0) request.selected = data.getIntArray("selected");
-                }, this::queryFailed));
+                }, failure -> queryFailed(view, failure)));
     }
-    private void cancelWork() { if (work != null) { work.cancel(); work = null; } }
-    private void queryFailed(Exception failure) {
-        work = null;
-        if (failure instanceof InspectorQueryJob.Changed) { nextRefresh = age; return; }
+    private void queryFailed(GuiSubscription view, Exception failure) {
+        view.work = null;
+        if (failure instanceof InspectorQueryJob.Changed) { view.nextRefresh = age; return; }
         LogManager.getLogger("AE Inspector").error("Cannot query inspector history", failure);
         reportFailure("aeinspector.read_error"); player.closeScreen();
     }
     @Override public void onContainerClosed(EntityPlayer player) {
         super.onContainerClosed(player);
-        closed = true; cancelWork();
+        closed = true; statistics.close(); devices.close();
         if (player instanceof EntityPlayerMP) InspectorProtocol.forget((EntityPlayerMP) player);
     }
 }

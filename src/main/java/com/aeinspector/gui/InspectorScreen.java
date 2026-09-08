@@ -31,6 +31,7 @@ public final class InspectorScreen extends GuiContainer {
     private final GuiRequestState requests = new GuiRequestState();
     private final GraphTimeline timeline = new GraphTimeline();
     private final ClientRowList table = new ClientRowList();
+    private final InspectorScreen statistics;
     private final boolean devicesView;
     private final String resourceName;
     private NBTTagCompound data = new NBTTagCompound();
@@ -40,7 +41,7 @@ public final class InspectorScreen extends GuiContainer {
     private InspectorLayout.Controls controls;
     private SnapshotBatch receiving;
     private NBTTagList deferredRows;
-    private boolean refreshNeeded, resizeNeeded, dragging, resizingTable;
+    private boolean refreshNeeded, resizeNeeded, dragging, resizingTable, switchingView, backgroundFirst;
     private int dividerGrab;
     private int scaleOverride, scaleFactor;
     private int dragOffset, dragGrab, mouseX, mouseY;
@@ -49,9 +50,11 @@ public final class InspectorScreen extends GuiContainer {
     private double displayEnd;
     private String failure;
 
-    public InspectorScreen(InspectorContainer container) { this(container,new InspectorProtocol.Request(),false,""); }
-    private InspectorScreen(InspectorContainer container,InspectorProtocol.Request request,boolean devices,String name) {
-        super(container); this.request=request; devicesView=devices; resourceName=name;
+    public InspectorScreen(InspectorContainer container) {
+        this(container,InspectorClientSettings.restore(Minecraft.getMinecraft().mcDataDir,Minecraft.getMinecraft().getNetHandler()),null,"");
+    }
+    private InspectorScreen(InspectorContainer container,InspectorProtocol.Request request,InspectorScreen statistics,String name) {
+        super(container); this.request=request; this.statistics=statistics; devicesView=statistics!=null; resourceName=name;
     }
     private static String tr(String key) { return StatCollector.translateToLocal("aeinspector."+key); }
     @Override public void setWorldAndResolution(Minecraft minecraft,int ignoredWidth,int ignoredHeight) {
@@ -86,17 +89,15 @@ public final class InspectorScreen extends GuiContainer {
     }
     private void button(int id,int x,int y,int w,int h,String label) { buttonList.add(new InspectorButton(id,guiLeft+x,guiTop+y,w,h,label)); }
     private InspectorProtocol.Request copyRequest() {
-        InspectorProtocol.Request copy=new InspectorProtocol.Request();
-        copy.window=inventorySlots.windowId; copy.level=request.level; copy.sort=request.sort; copy.search=request.search;
-        copy.rows=request.rows; copy.sequence=request.sequence; copy.devices=devicesView; copy.filter=request.filter;
-        copy.resourceOffset=request.resourceOffset; copy.deviceOffset=request.deviceOffset; copy.selected=request.selected.clone(); return copy;
+        InspectorProtocol.Request copy=request.copy();
+        copy.window=inventorySlots.windowId; copy.devices=devicesView; return copy;
     }
     private void sendRequest() {
         if(requests.pending()) return;
         request.sequence=++nextSequence; searchDue=0; refreshNeeded=false;
         receiving=null;
         requests.begin(request.sequence,System.nanoTime()); refreshControls();
-        InspectorProtocol.expectSnapshot(inventorySlots.windowId,request.sequence);
+        InspectorProtocol.expectSnapshot(devicesView,inventorySlots.windowId,request.sequence);
         InspectorProtocol.CHANNEL.sendToServer(copyRequest());
     }
     private void refreshControls() {
@@ -114,15 +115,26 @@ public final class InspectorScreen extends GuiContainer {
     }
     @Override public void updateScreen() {
         if(resizeNeeded) { resizeNeeded=false; setWorldAndResolution(mc,width,height); }
-        super.updateScreen(); search.updateCursorCounter(); long now=System.nanoTime();
+        super.updateScreen();
+        if(mc.currentScreen!=this) return;
+        search.updateCursorCounter(); long deadline=System.nanoTime()+2_000_000L;
+        // Share the existing decode budget and alternate priority; a large hidden table cannot starve I/O or vice versa.
+        if(statistics!=null&&(backgroundFirst=!backgroundFirst)) {
+            statistics.updateData(deadline); updateData(deadline);
+        } else {
+            updateData(deadline); if(statistics!=null) statistics.updateData(deadline);
+        }
+    }
+    private void updateData(long deadline) {
+        long now=System.nanoTime();
         if(refreshNeeded&&!requests.pending()) { refreshNeeded=false; sendRequest(); }
         if(searchDue!=0&&now>=searchDue&&!requests.pending()) sendRequest();
-        if(receiving==null) receiving=InspectorProtocol.takeSnapshot();
+        if(System.nanoTime()>=deadline) { refreshControls(); return; }
+        if(receiving==null) receiving=InspectorProtocol.takeSnapshot(devicesView);
         if(receiving!=null) try {
             if(receiving.window!=inventorySlots.windowId||receiving.sequence!=request.sequence) { receiving=null; return; }
             NBTTagCompound next=null;
-            long decodeStart=System.nanoTime();
-            do { next=receiving.decodeStep(); } while(next==null&&System.nanoTime()-decodeStart<2_000_000L);
+            do { next=receiving.decodeStep(); } while(next==null&&System.nanoTime()<deadline);
             if(next==null) { refreshControls(); return; }
             receiving=null;
             if(searchDue!=0||next.getInteger("window")!=inventorySlots.windowId||next.getInteger("sequence")!=request.sequence) return;
@@ -157,14 +169,27 @@ public final class InspectorScreen extends GuiContainer {
         if(b.id>=100) {
             NBTTagCompound row=rows().getCompoundTagAt(b.id-100); InspectorProtocol.Request next=copyRequest();
             next.selected=new int[]{row.getInteger("id")}; next.deviceOffset=0;
-            mc.displayGuiScreen(new InspectorScreen((InspectorContainer)inventorySlots,next,true,row.getString("name"))); return;
+            switchTo(new InspectorScreen((InspectorContainer)inventorySlots,next,this,row.getString("name"))); return;
         }
         if(b.id>=20&&b.id<29) request.level=b.id-20;
         else if(b.id==6) { request.sort=(request.sort+1)%3; request.resourceOffset=0; b.displayString=tr("sort."+request.sort); }
         else if(b.id==9) { request.filter=(request.filter+1)%3; request.resourceOffset=0; request.selected=new int[0]; b.displayString=tr("filter."+request.filter); }
         sendRequest();
     }
-    private void showStatistics() { mc.displayGuiScreen(new InspectorScreen((InspectorContainer)inventorySlots,copyRequest(),false,"")); }
+    private void switchTo(InspectorScreen next) {
+        switchingView=true;
+        try { mc.displayGuiScreen(next); }
+        finally { switchingView=false; }
+    }
+    private void showStatistics() {
+        if(statistics==null) return;
+        // Restore the original screen and its live data, selection and local scroll; no new main query.
+        switchTo(statistics);
+        if(mc.currentScreen!=statistics) return;
+        InspectorProtocol.Request stop=copyRequest(); stop.sequence=++nextSequence; stop.subscribe=false;
+        InspectorProtocol.closeSnapshots(true); receiving=null;
+        InspectorProtocol.CHANNEL.sendToServer(stop);
+    }
     @Override protected void keyTyped(char character,int key) {
         if(key==Keyboard.KEY_ESCAPE) { if(devicesView) showStatistics(); else super.keyTyped(character,key); return; }
         if(requests.pending()) return;
@@ -192,6 +217,10 @@ public final class InspectorScreen extends GuiContainer {
         return layout.rowsTop+(int)((trackHeight()-thumbHeight())*position/(double)Math.max(1,count()-layout.rows));
     }
     @Override public void handleMouseInput() {
+        if(devicesView&&Mouse.getEventButton()==3) {
+            if(Mouse.getEventButtonState()) showStatistics();
+            return;
+        }
         super.handleMouseInput(); int wheel=Mouse.getEventDWheel();
         int x=Mouse.getEventX()*width/mc.displayWidth-guiLeft,y=height-Mouse.getEventY()*height/mc.displayHeight-1-guiTop;
         if(wheel!=0&&!dragging&&!resizingTable&&x>=8&&x<xSize-6&&y>=layout.rowsTop&&y<layout.rowsTop+trackHeight()) scrollTo(offset()+(wheel>0?-1:1));
@@ -453,6 +482,9 @@ public final class InspectorScreen extends GuiContainer {
     }
     private void drawInspector(int mx,int my,float partial) {
         super.drawScreen(mx,my,partial); int x=mx-guiLeft,y=my-guiTop;
+        if(devicesView&&x>=12&&x<77&&y>=29&&y<48) {
+            drawHoveringText(Collections.singletonList(tr("back_hint")),mx,my,fontRendererObj); return;
+        }
         if(!devicesView&&!resizingTable&&x>=10&&x<xSize-10&&Math.abs(y-layout.dividerY())<=5) {
             drawHoveringText(Arrays.asList(tr("resize_table"),tr("reset_table")),mx,my,fontRendererObj); return;
         }
@@ -499,7 +531,11 @@ public final class InspectorScreen extends GuiContainer {
         drawHoveringText(tip,mx,my,fontRendererObj);
     }
     @Override public void onGuiClosed() {
+        if(switchingView) return; // Navigation shares the container and keeps the main subscription alive.
         if(resizingTable) InspectorClientSettings.setTableRows(layout.rows);
+        InspectorScreen main=statistics==null?this:statistics;
+        InspectorClientSettings.remember(mc.getNetHandler(),main.request);
+        main.receiving=null; main.deferredRows=null;
         receiving=null; deferredRows=null; InspectorProtocol.closeSnapshots();
         Keyboard.enableRepeatEvents(false); super.onGuiClosed();
     }

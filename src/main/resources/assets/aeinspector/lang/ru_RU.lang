@@ -13,6 +13,7 @@ aeinspector.choose_resource=Выберите ресурс внизу
 aeinspector.devices=Устройства
 aeinspector.devices_for=I/O устройства для:
 aeinspector.back=Назад
+aeinspector.back_hint=К статистике: Esc или боковая кнопка мыши «Назад»
 aeinspector.all=Всё
 aeinspector.now=сейчас
 aeinspector.minute_short=мин

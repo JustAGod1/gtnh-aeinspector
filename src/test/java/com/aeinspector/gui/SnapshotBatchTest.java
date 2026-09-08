@@ -11,6 +11,27 @@ import net.minecraft.nbt.NBTTagList;
 import org.junit.Test;
 
 public class SnapshotBatchTest {
+    @Test public void hiddenStatisticsKeepsReceivingWhileIoChangesAndCloses() throws Exception {
+        SnapshotViews views = new SnapshotViews();
+        views.expect(false, 4, 20); views.expect(true, 4, 21);
+        List<InspectorProtocol.Snapshot> main = response(20, 1, 300, false), io = response(21, 1, 5, true);
+        views.receive(main.get(0));
+        for (InspectorProtocol.Snapshot packet : io) views.receive(packet);
+        assertEquals(5, views.take(true).decodeStep().getTagList("devices", 10).tagCount());
+        views.expect(true, 4, 22); // changing the I/O period cannot clear an incomplete main response
+        for (int i = 1; i < main.size(); i++) views.receive(main.get(i));
+        SnapshotBatch batch = views.take(false); assertNotNull(batch);
+        NBTTagCompound decoded; do { decoded = batch.decodeStep(); } while (decoded == null);
+        assertEquals(300, decoded.getTagList("resources", 10).tagCount());
+        for (InspectorProtocol.Snapshot packet : response(20, 2, 40, false)) views.receive(packet);
+        views.close(true); // back retains the latest main snapshot, without a new expect/request
+        for (InspectorProtocol.Snapshot packet : response(22, 2, 4, true)) views.receive(packet);
+        assertNull(views.take(true));
+        assertEquals(40, views.take(false).decodeStep().getTagList("resources", 10).tagCount());
+        views.close();
+        for (InspectorProtocol.Snapshot packet : response(20, 3, 10, false)) views.receive(packet);
+        assertNull(views.take(false));
+    }
     @Test public void tenThousandRowsArriveInBoundedPacketsAndBecomeVisibleTogether() throws Exception {
         List<InspectorProtocol.Snapshot> packets = response(3, 1, 10000, false);
         assertTrue(packets.size() > 70);
