@@ -34,5 +34,15 @@
  * For more details, see https://docs.gradle.org/8.0.1/userguide/java_library_plugin.html#sec:java_library_configurations_graph
  */
 dependencies {
-    //runtimeOnlyNonPublishable("com.github.GTNewHorizons:NotEnoughItems:2.7.69-GTNH:dev")
+    implementation('com.github.GTNewHorizons:Applied-Energistics-2-Unofficial:rv3-beta-695-GTNH:dev')
+    implementation('com.github.GTNewHorizons:AE2FluidCraft-Rework:1.4.120-gtnh:dev') { transitive = false }
+    testImplementation('junit:junit:4.13.2')
+    // Only signatures inherited from AE2's powered item; runtime integrations are supplied by GTNH/AE2.
+    compileOnly('curse.maven:cofh-core-69162:2388751') { transitive = false }
+    compileOnly('net.industrial-craft:industrialcraft-2:2.2.828-experimental:api')
+}
+
+// Match the loader shipped in GTNH 2.8.4, including its MixinExtras 0.5.0 API.
+configurations.configureEach {
+    resolutionStrategy.force('io.github.legacymoddingmc:unimixins:0.1.23')
 }

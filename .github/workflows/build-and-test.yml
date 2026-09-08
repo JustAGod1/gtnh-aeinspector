@@ -1,13 +1,36 @@
 
-name: Build and test
+name: Build AE Inspector
 
 on:
-  pull_request:
-    branches: [ master, main ]
   push:
-    branches: [ master, main ]
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  build-and-test:
-    uses: GTNewHorizons/GTNH-Actions-Workflows/.github/workflows/build-and-test.yml@master
-    secrets: inherit
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Test and build release JAR
+        run: bash ./gradlew test reobfJar --console plain
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AE-Inspector
+          if-no-files-found: error
+          path: |
+            build/libs/AE-Inspector-*.jar
+            !build/libs/*-dev.jar
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: build/reports/tests/test/

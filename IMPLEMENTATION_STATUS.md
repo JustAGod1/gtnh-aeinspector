@@ -1,0 +1,71 @@
+# Implementation status
+
+## Scope and latest instruction
+
+Implement the entire specification, not just the standalone database. The user prohibited multithreading. This overrides original background-write/query clauses: runtime aggregation, queries and persistence must run on the server thread. Asynchronous implementations were replaced, and tests rerun.
+
+## Current evidence
+
+- Manual build 06 changes UI rate units from per-second to per-minute per user's Factorio reference. List/I/O rates multiply existing per-second values by 60; chart bucket rates use 1200 ticks/minute consistently for maxima and vertices. Counts and stored series unchanged. reobfJar successful; no new tests for this display-only conversion. Visual/in-game confirmation remains pending.
+
+- Manual build 05: separate I/O screen opened by per-resource I/O button; two incoming/outgoing charts, nine direct scale buttons, per-window count/rate columns and bars, descending incoming/outgoing or name sort. Ordinary click selects one graph, Shift-click compares. OpenGL lighting/depth state isolated around graphs/icons. User provided screenshot proved earlier chart rendering and layout were broken; new visuals still require their GTNH check. Build/test/reobf succeeded (31 tests).
+- Fixed root cause of unknown bus endpoints: AEBasePart creates AENetworkProxy(worldNode=false) for non-cable parts. FlowRuntime must not reject location on isWorldAccessible=false. Coordinates now use the actual part or grid-block location. Historical unknown records cannot be reassigned; UI omits fake coordinates/highlight.
+- Fluid representation helper explicitly copies FluidTag; AE2FC ItemFluidDrop.newStack in pinned 1.4.120 omits it. Two format tests run without Forge registries. These do not prove in-game fluid/Discretizer transfers. Previous attempted full registry tests failed because standalone JUnit has no LaunchClassLoader, then were replaced by scoped format tests.
+
+- Source dev.4 exposes exact 64-bit incoming/outgoing counts separately from estimated storage changes in device tooltips (selected window and lifetime), selected resource lifetime tooltips, and hovered graph buckets. Units distinguish items and mB; unobserved buckets show no observations. This is UI functionality work, not performance tuning. Visual validation remains with the user; immutable manual builds 02/03 are unchanged.
+
+- Manual build 02 (`dist/manual-test-02/aeinspector-0.1.0-dev.2.jar`) fixes right-click GUI closure: vanilla NetHandlerPlayServer copies the held stack after opening the container. HeldStackBinding restores only an exactly equal copy; hidden locked hotbar slots support vanilla packet synchronization. 29 tests passed. User's GTNH verification is pending; do not launch their game. Performance work is paused by explicit user instruction until functionality works.
+- Source after build 02 adds localized, one-time chat/log reasons for session closure and handles history-query IO failure by closing the inspector with an error instead of throwing from the container tick. Build 02 remains immutable; these changes belong to dev.3.
+
+- Source changes after manual build 01: InspectorGridCache tracks currently loaded nodes; DeviceCatalog lists configured item/fluid import/export buses without allocating history pairs/series. Item fuzzy/Ore-filter matching uses AE2 rules; fluid filters use full FluidStack identity; capacity-card slot limits follow upstream (fluid import inspects all nine slots). Configured resources become visible before their first transfer, and matching devices expose filter/connection state in tooltips. Compiled with existing tests passing; direct catalog unit/game tests and interface/storage-bus idle catalog coverage remain outstanding. The `dist/manual-test-01` artifact is unchanged.
+
+- Latest user steering: user will perform in-game manual tests; do not keep launching automated gameplay sessions. Manual build 01 is prepared in `dist/manual-test-01/`, with `docs/MANUAL_TEST_RU.md`. SHA256 of its reobfuscated JAR: `B6A36F2A3D5B4CB9EFE5721EE3DD26B43D3A1C12762D648836D3913FA73E0EA7`. This artifact is a fixed testing checkpoint, not the completed release.
+- Latest `test` passed 27 tests, including three new BusTransferScope tests; `reobfJar` passed. BusTransferScope and BusOperationMixin net extraction/return legs for the same bus, resource and network within doBusWork. Unrelated source operations and operations outside the scope remain separate. New mixin targets are included in the source smoke harness, but were NOT run in-game after the user requested manual testing. Existing four-target transformation proof remains valid only for those earlier hooks.
+
+- Bootstrapped from GTNH ExampleMod1.7.10, build convention 2.0.20. Specification copied from the supplied attachment and updated for single-thread operation.
+- `gradle test`: successful, 24 tests across 11 classes, no failures/errors. Report: `build/reports/tests/test/index.html`. Added history query/lineage/coverage tests, packet round trips and bounds, recipe NBT preservation.
+- Tests: metadata/NBT mutation, tag types, compound order, lists, arrays, hash collisions, dictionary serialization; counter rehash/long quantities; rollup conservation/partial buckets; sparse gaps/restart; partial transfers/simulation/player/reservation/nesting; storage cache and restart.
+- Accumulator-only benchmark: 5000 calls/tick, 10000 keys, 100000 items/call; Ryzen 9 5900X, Oracle Java 21.0.11; p50 0.0218 ms, p95 0.0229 ms, p99 0.0400 ms. Primitive array payload 557056 bytes. **Not the required end-to-end AE2/NBT/database benchmark.**
+- ResourceResolver compiles against pinned AE2/AE2FC but has no integration tests yet.
+- Added InspectorMod lifecycle, InspectorGridCache, FlowRuntime, NetworkRecord/DeviceDictionary and WorldStatistics. Dictionaries and row IDs are persisted before shard writes; crash recovery reserves a tick upper bound. Restart tests cover identities, totals, lineage and observation intervals.
+- Added late recording mixins for NetworkInventoryHandler, CraftingCPUCluster, MEMonitorIInventory and MEMonitorIFluidHandler. Reservations/returns are suppressed, successful executor acceptance counts consumption, actual CPU arrivals count production; external storage diffs subtract known AE operations. **Compilation and unit tests are not runtime Mixin transformation or GTNH integration validation.**
+- Exact NBT traversal handles nested lists, floating-point bit patterns and compound order; vanilla-compatible dictionary encoding preserves NaN payloads and empty-list element types without mutating the stored key. Round-trip tests cover these cases.
+- SeriesDatabase uses indexed row arrays, a reusable lookup key and incremental memory accounting; no per-row filename construction or boxed row IDs. Dirty shards are saved oldest-first using an intrusive list. Tests cover fairness under continuous updates and retaining dirty data after write failures.
+- No own threads/executors/futures/asynchronous IO occur in src/main. Protocol mailboxes hand off already received packets to existing server/client game loops; queries and world access never run in transport callbacks.
+- Added ItemInspector, InspectorRecipe, WirelessSession, InspectorContainer, InspectorData/Protocol/Screen, GUI handlers, RU/EN localizations and an original 16px icon. Graphs have nine scales, up to eight selections, exact/estimated channel data and gap coverage; resources/device pages and AE2 native highlighting are wired. Still needs visual/in-game validation and inactive-device catalog support.
+- HistoryQuery deduplicates lineage DAG nodes, combines exact and estimated channels without losing separate totals, clips fixed windows and rebins all-time data. Query building currently synchronous and not yet incrementally budgeted.
+- `test reobfJar` succeeded with UniMixins 0.1.23 pinned, including the recipe-sorter correction. Experimental artifacts: `build/libs/aeinspector-0.1.0-dev.jar` (reobfuscated) and `aeinspector-0.1.0-dev-dev.jar` (development). They are NOT complete/validated releases.
+- First real `runClient21` launch reached the main menu and loaded 24 mods, including AE Inspector and its late mixin loader. This does not establish transformed target classes: they were not loaded at the menu. Added opt-in `src/smoke` companion to explicitly load/check all four targets using Launch.classLoader and shut down at the menu. Build `smokeJar` separately before `runClient21`; do not invoke both together (Gradle may start the client despite a smoke compilation failure).
+- The subsequent smoke companion run PASSED: target classes have 3/4/6/6 injected handlers, respectively; the client exited normally at the main menu. Reports in `run/client/inspector-transformation-smoke.txt` and `docs/VALIDATION.md`. Actual transfer semantics still require integrated-world tests. The smoke JAR remains under `run/client/mods`, so future client runs will auto-exit unless the harness is changed or that test artifact is removed.
+
+## Tooling and upstream evidence
+
+- Workspace: `C:/Users/JustAGod/Projects/me-inspector`.
+- Local JDK: `.tools/jdk25/jdk-25.0.4.1+1`; Gradle: `.tools/gradle-9.3.1`. Set JAVA_HOME to the JDK before running `.tools/gradle-9.3.1/bin/gradle.bat test --console plain`. Log: `build/gradle-test.log`. No build process remained running at this checkpoint.
+- Minecraft sources: `build/rfg/minecraft-src/java`.
+- `.research/ae2`: tag rv3-beta-695-GTNH, commit 9e7cf61f368a42a806d70ffb21308bf26a818659.
+- `.research/ae2fc`: tag 1.4.120-gtnh, commit 64d2987c2d8a9595d0c9d926b60d402fd0a49d7d.
+- UniMixins forced to 0.1.23, matching GTNH 2.8.4 and providing MixinExtras 0.5.0. Empty early `mixins.aeinspector.json` was added to satisfy the template-generated manifest; real hooks remain in the late config.
+- Added compile-only IC2 and CoFH signatures inherited by AE2's powered item. A transient CurseMaven DNS error recovered; compilation succeeded without changing dependency scope. No GregTech dependency.
+
+## Next work
+
+1. Validate grid-cache split/join/restore lifecycle in AE2; audit metadata/shard recovery ordering and failure cases. Add configuration and diagnostics.
+2. Validate recording mixins actually transform pinned upstream classes, including method descriptors and late loader compatibility. Test manual calls, subnet forwarding and Discretizer conversion in game.
+3. Exercise autocrafting intermediates, container items and cancellation in game; remove per-dispatch temporary arrays after measuring their cost.
+4. Validate item/fluid storage monitor hooks in game, including initial visibility, reconfiguration, nested calls and external changes discovered during an AE operation.
+5. Validate existing wireless tool linking, charge/range/key revocation and recipe in game. Read-only view permission follows stock wireless-terminal behavior (the upstream view itself requires no BUILD permission).
+6. Add inactive device/filter matches; validate/render GUI, improve labels/tooltips and exact/estimated totals presentation. Cache resource display names and incrementally budget query work without background threads.
+7. Full GTNH runtime/transformation checks and end-to-end benchmarks: complex/unique NBT, 10000 endpoint/resource combinations, multiple viewers, allocations/GC/save spikes.
+8. Format/check/package; deliver JAR, install instructions and validation report. All specification items require completion audit.
+
+## Engineering follow-ups
+
+- Run full aggregation/NBT/database benchmarks; existing accumulator-only measurements do not establish throughput acceptance.
+- Cache budgets estimate payloads; measure object overhead. Synchronous eviction/checkpoints can exceed a tick budget; improve segment sizing/scheduling and measure latency.
+- Save coordinator exists with periodic checkpoints and world-save/stop hooks. Audit crash consistency across metadata and shard commits; complete failure/corruption tests.
+- HistoryQuery now applies windows/coverage above SeriesDatabase; avoid repeated lineage/coverage copies and materializing full graphs for device-rate-only queries.
+- Critical integration follow-up: AE2FC fluid export may extract N, deliver fewer and inject the remainder. Current network hooks record both legs; add operation-level rollback netting and test partial external acceptance so return legs do not become false production.
+- Dedicated `runServer21` stopped before launch because the Gradle task requires explicit Minecraft EULA acceptance. No EULA was accepted. A normal development client launches without that dedicated-server gate; integrated-world tests are still available.
+- Add corruption/failure tests and additional nested NBT/Fluid Drop cases.
+- Remove template release workflows/example metadata before delivery.
